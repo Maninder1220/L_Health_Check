@@ -47,24 +47,11 @@ MODEL_URL="${MODEL_URL:-https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/resolve/main
 MODEL_SHA256="${MODEL_SHA256:-061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a}"
 LEGACY_MODEL_FILE="${LEGACY_MODEL_FILE:-Qwen3-4B-Q4_K_M.gguf}"
 
-# CI_MODE=1 is intended for hosted macOS CI runners. It avoids Docker Desktop
-# and the 1.83 GB model download while still testing Homebrew, Docker/Compose
-# CLI availability, Rust, repository layout, env templates, Cargo, and timing.
-CI_MODE="${CI_MODE:-0}"
-
-if [ "$CI_MODE" = "1" ]; then
-  DOWNLOAD_MODEL="${DOWNLOAD_MODEL:-0}"
-  INSTALL_DOCKER_DESKTOP="${INSTALL_DOCKER_DESKTOP:-0}"
-  SKIP_DOCKER_DAEMON="${SKIP_DOCKER_DAEMON:-1}"
-else
-  DOWNLOAD_MODEL="${DOWNLOAD_MODEL:-1}"
-  INSTALL_DOCKER_DESKTOP="${INSTALL_DOCKER_DESKTOP:-1}"
-  SKIP_DOCKER_DAEMON="${SKIP_DOCKER_DAEMON:-0}"
-fi
-
+DOWNLOAD_MODEL="${DOWNLOAD_MODEL:-1}"
 RUN_CARGO_CHECK="${RUN_CARGO_CHECK:-1}"
 RUN_CARGO_BUILD="${RUN_CARGO_BUILD:-0}"
 STRICT_COMPOSE_CHECK="${STRICT_COMPOSE_CHECK:-0}"
+INSTALL_DOCKER_DESKTOP="${INSTALL_DOCKER_DESKTOP:-1}"
 DOCKER_WAIT_SECONDS="${DOCKER_WAIT_SECONDS:-240}"
 
 ENV_STORAGE_SOURCE="${ENV_STORAGE_SOURCE:-$APP_DIR/.env.storage.example}"
@@ -237,23 +224,6 @@ install_packages() {
 install_and_start_docker_desktop() {
   configure_brew_shell
 
-  if [ "$CI_MODE" = "1" ] || [ "$SKIP_DOCKER_DAEMON" = "1" ]; then
-    log "CI mode: installing/verifying Docker and Compose CLI only"
-    brew install docker docker-compose
-
-    # Homebrew installs docker-compose as a CLI plugin formula. Expose it in
-    # Docker's standard per-user plugin directory when necessary.
-    mkdir -p "$HOME/.docker/cli-plugins"
-    if [ -x "$(brew --prefix)/opt/docker-compose/bin/docker-compose" ]; then
-      ln -sfn         "$(brew --prefix)/opt/docker-compose/bin/docker-compose"         "$HOME/.docker/cli-plugins/docker-compose"
-    fi
-
-    docker --version
-    docker compose version
-    warn "Docker daemon/Desktop startup skipped in CI mode"
-    return 0
-  fi
-
   if ! command_exists docker && [ "$INSTALL_DOCKER_DESKTOP" = "1" ]; then
     log "Installing Docker Desktop through Homebrew cask"
     brew install --cask docker
@@ -279,7 +249,7 @@ install_and_start_docker_desktop() {
 
 install_rust() {
   if [ -f "$HOME/.cargo/env" ]; then
-    # shellcheck source=/dev/null
+    # shellcheck disable=SC1090
     source "$HOME/.cargo/env"
   fi
 
@@ -293,7 +263,7 @@ install_rust() {
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
     sh -s -- -y --profile minimal --default-toolchain stable
 
-  # shellcheck source=/dev/null
+  # shellcheck disable=SC1090
   source "$HOME/.cargo/env"
   rustc --version
   cargo --version
@@ -304,33 +274,15 @@ clone_or_update_repo() {
   mkdir -p "$BASE_DIR"
 
   if [ -d "$REPO_DIR/.git" ]; then
-    log "Using existing repository checkout: $REPO_DIR"
     cd "$REPO_DIR"
-    git remote -v || true
-    git status --short || true
-
-    # A GitHub Actions checkout may be detached at the exact workflow commit.
-    # Do not pull or switch refs during CI because that would test different code.
-    if [ "$CI_MODE" != "1" ]; then
-      git pull --ff-only || warn "git pull failed; continuing with the existing checkout"
-    fi
+    git remote -v
+    git status --short
+    git pull --ff-only || warn "git pull failed; continuing with the existing checkout"
   else
-    log "Cloning OSAI source repository: $REPO_URL"
     git clone "$REPO_URL" "$REPO_DIR"
   fi
 
-  if [ ! -d "$APP_DIR" ]; then
-    printf '[ERROR] Expected application directory is missing: %s\n' "$APP_DIR" >&2
-    printf '[ERROR] Repository directory used: %s\n' "$REPO_DIR" >&2
-    printf '[ERROR] Repository URL configured: %s\n' "$REPO_URL" >&2
-    printf '[ERROR] Current Git commit: %s\n' "$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || printf unknown)" >&2
-    printf '[ERROR] Top-level repository contents:\n' >&2
-    find "$REPO_DIR" -mindepth 1 -maxdepth 2 -print 2>/dev/null | sort | sed -n '1,120p' >&2 || true
-    die "The tested repository/ref does not contain osai-agent. Check out the OSAI source into REPO_DIR or set APP_DIR to its real path."
-  fi
-
-  [ -f "$APP_DIR/Cargo.toml" ] || die "Expected Cargo.toml is missing: $APP_DIR/Cargo.toml"
-  log "OSAI application source found: $APP_DIR"
+  [ -d "$APP_DIR" ] || die "Expected app directory is missing: $APP_DIR. Ensure the repository/branch contains osai-agent or override APP_DIR."
 }
 
 prepare_env_files() {
@@ -383,10 +335,8 @@ download_model() {
 }
 
 verify_project() {
-  if [ -f "$HOME/.cargo/env" ]; then
-    # shellcheck source=/dev/null
-    source "$HOME/.cargo/env"
-  fi
+  # shellcheck disable=SC1090
+  [ ! -f "$HOME/.cargo/env" ] || source "$HOME/.cargo/env"
 
   [ -f "$APP_DIR/Cargo.toml" ] || die "Cargo.toml missing: $APP_DIR/Cargo.toml"
   cd "$APP_DIR"
@@ -429,10 +379,9 @@ Model:
 Compatibility model path:
   $MODEL_DIR/$LEGACY_MODEL_FILE
 
-Docker tooling:
+Docker:
   $(docker --version)
   $(docker compose version)
-  Daemon/Desktop tested: $([ "$SKIP_DOCKER_DAEMON" = "1" ] && printf 'no (CI mode)' || printf 'yes')
 
 Important macOS limitation:
   This bootstrap prepares local development and Docker-based services.
@@ -459,14 +408,8 @@ SUMMARY
 
 main() {
   log "OSAI macOS bootstrap started"
-  if [ "$CI_MODE" = "1" ]; then
-    log "Mode: hosted macOS CI smoke test"
-    log "Expected CI duration: approximately 3-15 minutes"
-  else
-    log "Mode: local macOS development bootstrap"
-    log "Expected first-run duration: approximately 15-45 minutes"
-    log "Expected repeat-run duration: approximately 2-10 minutes"
-  fi
+  log "Expected first-run duration: approximately 15-45 minutes"
+  log "Expected repeat-run duration: approximately 2-10 minutes"
 
   timed_step "Validate macOS and current user" validate_macos
   timed_step "Check Apple Command Line Tools" ensure_xcode_clt
