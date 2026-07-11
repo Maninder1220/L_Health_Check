@@ -1,0 +1,90 @@
+name: Test OSAI macOS Installer
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "startersv-macos-ci-ready-qwen3-1.7b.sh"
+      - ".github/workflows/test-macos-installer.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "startersv-macos-ci-ready-qwen3-1.7b.sh"
+      - ".github/workflows/test-macos-installer.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  static-checks:
+    name: Bash and ShellCheck
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate Bash syntax
+        run: bash -n startersv-macos-ci-ready-qwen3-1.7b.sh
+
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Run ShellCheck
+        run: shellcheck -x startersv-macos-ci-ready-qwen3-1.7b.sh
+
+  macos-smoke-test:
+    name: macOS smoke test (${{ matrix.os }})
+    needs: static-checks
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-15
+          - macos-26
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Show runner details
+        run: |
+          sw_vers
+          uname -a
+          uname -m
+          /bin/bash --version | head -n 1
+          xcode-select -p
+          brew --version | head -n 1
+
+      - name: Validate installer syntax on macOS Bash
+        run: /bin/bash -n startersv-macos-ci-ready-qwen3-1.7b.sh
+
+      - name: Run macOS bootstrap in CI mode
+        env:
+          CI_MODE: "1"
+          DOWNLOAD_MODEL: "0"
+          INSTALL_DOCKER_DESKTOP: "0"
+          SKIP_DOCKER_DAEMON: "1"
+          RUN_CARGO_CHECK: "1"
+          RUN_CARGO_BUILD: "0"
+          STRICT_COMPOSE_CHECK: "0"
+          REPO_URL: ${{ github.workspace }}
+          BASE_DIR: ${{ runner.temp }}/osai
+        run: /bin/bash startersv-macos-ci-ready-qwen3-1.7b.sh
+
+      - name: Upload bootstrap log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-bootstrap-log-${{ matrix.os }}
+          path: ~/Library/Logs/osai/macos-bootstrap.log
+          if-no-files-found: warn
+          retention-days: 7
+
