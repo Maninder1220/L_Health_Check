@@ -279,7 +279,7 @@ install_and_start_docker_desktop() {
 
 install_rust() {
   if [ -f "$HOME/.cargo/env" ]; then
-    # shellcheck disable=SC1090
+    # shellcheck source=/dev/null
     source "$HOME/.cargo/env"
   fi
 
@@ -293,7 +293,7 @@ install_rust() {
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
     sh -s -- -y --profile minimal --default-toolchain stable
 
-  # shellcheck disable=SC1090
+  # shellcheck source=/dev/null
   source "$HOME/.cargo/env"
   rustc --version
   cargo --version
@@ -365,8 +365,10 @@ download_model() {
 }
 
 verify_project() {
-  # shellcheck disable=SC1090
-  [ ! -f "$HOME/.cargo/env" ] || source "$HOME/.cargo/env"
+  if [ -f "$HOME/.cargo/env" ]; then
+    # shellcheck source=/dev/null
+    source "$HOME/.cargo/env"
+  fi
 
   [ -f "$APP_DIR/Cargo.toml" ] || die "Cargo.toml missing: $APP_DIR/Cargo.toml"
   cd "$APP_DIR"
